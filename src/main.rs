@@ -1,10 +1,15 @@
 use std::{ptr::NonNull, time::Duration};
 
 use rusb::{
-    constants::{LIBUSB_CLASS_WIRELESS, LIBUSB_TRANSFER_FREE_TRANSFER}, ffi::{libusb_alloc_transfer, libusb_attach_kernel_driver, libusb_claim_interface, libusb_detach_kernel_driver, libusb_fill_bulk_transfer, libusb_fill_control_transfer, libusb_fill_interrupt_transfer, libusb_handle_events, libusb_set_auto_detach_kernel_driver, libusb_submit_transfer, libusb_transfer, libusb_transfer_cb_fn}, request_type, Direction, GlobalContext, Recipient, RequestType, UsbContext
+    constants::{LIBUSB_CLASS_WIRELESS, LIBUSB_TRANSFER_FREE_TRANSFER}, ffi::{libusb_alloc_transfer, libusb_attach_kernel_driver, libusb_claim_interface, libusb_detach_kernel_driver, libusb_fill_bulk_transfer, libusb_fill_control_transfer, libusb_fill_interrupt_transfer, libusb_handle_events, libusb_release_interface, libusb_set_auto_detach_kernel_driver, libusb_submit_transfer, libusb_transfer, libusb_transfer_cb_fn}, request_type, Direction, GlobalContext, Recipient, RequestType, UsbContext
 };
 
+#[derive(Debug)]
 enum HCIEvent {
+    CommandStatus {
+        status: u8,
+        opcode: [u8; 2],
+    },
     InquiryResultWithRSSI{
         bdaddr: [u8; 6]
     },
@@ -12,6 +17,14 @@ enum HCIEvent {
 
 fn parse_hci_event(data: &[u8]) -> Option<HCIEvent> {
     match data[0] {
+        0x0f => {
+            let length = data[1];
+            let status = data[2];
+            let number_of_allowed_packets = data[3];
+            let mut opcode: [u8; 2] = data[4..6].try_into().unwrap();
+            opcode.reverse();
+            Some(HCIEvent::CommandStatus { opcode, status })
+        },
         0x22 => {
             let length = data[1];
             let number_of_responses = data[2];
@@ -40,9 +53,11 @@ extern "system" fn transfer_finished(transfer_ptr: *mut libusb_transfer) {
         dbg!(*transfer.buffer);
         let slice = std::slice::from_raw_parts(transfer.buffer, transfer.actual_length as usize);
         println!("{:#04x?}", slice);
-        if let Some(HCIEvent::InquiryResultWithRSSI { bdaddr }) = parse_hci_event(slice) {
+        let m_event = parse_hci_event(slice);
+        dbg!(&m_event);
+        if let Some(HCIEvent::InquiryResultWithRSSI { bdaddr }) = m_event {
             println!("bdaddr: {:#04x?}", bdaddr);
-        }
+        };
         let user_data = transfer.user_data;
         if !user_data.is_null() {
             dbg!(user_data);
@@ -91,23 +106,25 @@ fn main() {
 
     let dev_handle_raw = unsafe { NonNull::new_unchecked(dev_handle.as_raw()) };
     let enable = 1;
-    if dbg!(unsafe{libusb_set_auto_detach_kernel_driver(dev_handle_raw.as_ptr(), enable)}) < 0 {
-        eprintln!("failed to set auto detach kernel driver");
-        return
-    }
+    // if dbg!(unsafe{libusb_set_auto_detach_kernel_driver(dev_handle_raw.as_ptr(), enable)}) < 0 {
+    //     eprintln!("failed to set auto detach kernel driver");
+    //     return
+    // }
     let interface_number = 0;
     // if dbg!(unsafe{libusb_detach_kernel_driver(dev_handle_raw.as_ptr(), interface_number)}) < 0 {
     //     eprintln!("failed to detach kernel driver");
     //     return
     // }
-    if dbg!(unsafe{libusb_claim_interface(dev_handle_raw.as_ptr(), interface_number)}) < 0 {
-        // eprintln!(
-        //     "failed to claim interface: {}",
-        //     Errno::last().desc()
-        // );
-        eprintln!("failed to claim interface");
-        return
-    }
+    // if dbg!(unsafe{libusb_claim_interface(dev_handle_raw.as_ptr(), interface_number)}) < 0 {
+    //     // eprintln!(
+    //     //     "failed to claim interface: {}",
+    //     //     Errno::last().desc()
+    //     // );
+    //     eprintln!("failed to claim interface");
+    //     return
+    // }
+    dev_handle.detach_kernel_driver(interface_number).unwrap();
+    dev_handle.claim_interface(interface_number).unwrap();
 
     // println!("resetting.....");
     // dev_handle.reset().unwrap();
@@ -344,7 +361,10 @@ fn main() {
 
     std::thread::sleep(Duration::from_millis(6_000));
 
-    dbg!(unsafe{libusb_attach_kernel_driver(dev_handle_raw.as_ptr(), interface_number)});
+    unsafe {
+        dbg!(libusb_release_interface(dev_handle_raw.as_ptr(), interface_number as i32));
+        dbg!(libusb_attach_kernel_driver(dev_handle_raw.as_ptr(), interface_number as i32));
+    }
 
     println!("bye");
 }
