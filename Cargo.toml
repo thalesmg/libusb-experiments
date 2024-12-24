@@ -1,0 +1,8 @@
+[package]
+name = "libusb-experiments"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ffi = "0.1.1"
+rusb = "0.9.4"
